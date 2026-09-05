@@ -1,8 +1,11 @@
-#ifndef AREA_CALCULATOR_AREACALCULATOR_H
-#define AREA_CALCULATOR_AREACALCULATOR_H
+#ifndef AREA_CALCULATOR_AREACALCULATOR_H_
+#define AREA_CALCULATOR_AREACALCULATOR_H_
 
 #include <cinttypes>
+#include <cstdint>
+#include <forward_list>
 #include <queue>
+#include <unordered_map>
 
 #include "src/util.h"
 
@@ -18,6 +21,7 @@ namespace AreaCalculator {
 	// Result struct for the flood fill.
 	template <typename T>
 	struct Result : AreaUtilities::BoundingBox<T> {
+		bool haltedEarly;
 		uint64_t area;
 
 		constexpr Result(const T &x, const T &z) noexcept : AreaUtilities::BoundingBox<T>(x, z), area(0) {}
@@ -33,7 +37,7 @@ namespace AreaCalculator {
 	/* Calculates the area and bounding box under the provided Tester and starting coordinate.
 	The algorithm was largely ported from the final pseudocode in https://en.wikipedia.org/w/index.php?title=Flood_fill&oldid=1304229346#Span_filling .*/
 	template <typename T>
-	Result<T> calculate(Tester<T> &tester, const T &initialX, const T &initialZ) {
+	Result<T> calculate(Tester<T> &tester, const T &initialX, const T &initialZ, uint64_t maxIterations = UINT64_MAX) {
 		// Initialize result bounding box with starting coordinate
 		Result<T> result(initialX, initialZ);
 
@@ -46,7 +50,7 @@ namespace AreaCalculator {
 		// Initial spans to begin checking
 		queue.push({initialX, initialX, initialZ, 1});
 		queue.push({initialX, initialX, initialZ - 1, -1});
-		while (!queue.empty()) {
+		for (uint64_t iteration = 0; !queue.empty() && iteration < maxIterations; ++iteration) {
 			// We reuse a BoundingBox to avoid defining another structure with the same setup of attributes, even though maxZ is interpreted differently
 			AreaUtilities::BoundingBox currentBox = queue.front();
 			const T &z = currentBox.minZ, dz = currentBox.maxZ;
@@ -77,8 +81,9 @@ namespace AreaCalculator {
 			} while (currentBox.minX <= currentBox.maxX);
 			queue.pop();
 		}
+		result.haltedEarly = !queue.empty();
 		return result;
 	}
-}
+} // namespace AreaCalculator
 
-#endif
+#endif // AREA_CALCULATOR_AREACALCULATOR_H_
