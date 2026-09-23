@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <string.h>
+#include <cstring>
+#include <string>
+#include <unordered_set>
 
 #include "cubiomes/biomes.h"
 #include "cubiomes/generator.h"
@@ -10,7 +12,7 @@
 
 namespace MinecraftStringUtilities {
 	// Attempts to decipher a string as a Minecraft biome.
-	[[nodiscard]] int32_t interpretAsBiome(const char *const string) {
+	[[nodiscard]] std::int32_t interpretAsBiome(const char *const string) {
 		std::string lowercaseString = StringUtilities::toLowercase(string);
 		std::replace(lowercaseString.begin(), lowercaseString.end(), '_', ' ');
 		if (lowercaseString == "none" || lowercaseString == "na" || lowercaseString == "null" || lowercaseString == "0") return none;
@@ -112,7 +114,7 @@ namespace MinecraftStringUtilities {
 	}
 
 	// Attempts to decipher a string as a Minecraft dimension.
-	[[nodiscard]] int32_t interpretAsDimension(const char *const string) {
+	[[nodiscard]] std::int32_t interpretAsDimension(const char *const string) {
 		std::string lowercaseString = StringUtilities::toLowercase(string);
 		std::replace(lowercaseString.begin(), lowercaseString.end(), '_', ' ');
 		if (
@@ -130,7 +132,17 @@ namespace MinecraftStringUtilities {
 		throw std::runtime_error("Could not interpret \"" + lowercaseString + "\" as a Minecraft dimension.");
 	}
 
-	// Attempts to decipher a string as a Minecraft dimension.
+	// Attempts to print a set of Minecraft biomes as a string.
+	[[nodiscard]] std::string biomesToString(std::unordered_set<std::int32_t> biomes, std::int32_t version) {
+		std::string biomesString = "";
+		for (const std::int32_t &biome : biomes) {
+			biomesString += std::string(", ") + biome2str(version, biome);
+		}
+		// Erase leading ", "
+		return biomesString.erase(0, 2);
+	}
+
+	// Attempts to print a Minecraft dimension as a string.
 	[[nodiscard]] const char *dimensionToString(int32_t dimension) {
 		switch (dimension) {
 			case DIM_OVERWORLD: return "the Overworld";
@@ -139,21 +151,40 @@ namespace MinecraftStringUtilities {
 		}
 		return "[Invalid Minecraft dimension]";
 	}
-}
+} // namespace MinecraftStringUtilities
 
 /* Example test function.
-   Returns whether the current coordinate is a mushroom fields biome.
+   Returns whether the current coordinate matches a list of Minecraft biomes for a given worldseed/dimension.
 */
 struct BiomeTester : public AreaCalculator::Tester<int32_t> {
 	Generator generator;
-	int32_t biome, y;
+	std::int32_t y;
+	std::unordered_set<std::int32_t> biomes, ignoredBiomes;
 	int *biomeStorage;
 
-	BiomeTester(int32_t version, uint64_t worldseed, int32_t dimension, int32_t initialX, int32_t y, int32_t initialZ, bool largeBiomes, int32_t biome) noexcept {
+	BiomeTester(
+		std::int32_t version,
+		std::uint64_t worldseed,
+		std::int32_t dimension,
+		std::int32_t initialX, std::int32_t y, std::int32_t initialZ,
+		bool largeBiomes,
+		std::unordered_set<std::int32_t> biomes,
+		std::unordered_set<std::int32_t> ignoredBiomes
+	) noexcept {
 		this->y = y;
-		this->biome = biome;
-		if (dimension == DIM_UNDEF) dimension = getDimension(biome);
+		this->biomes = biomes;
+		this->ignoredBiomes = ignoredBiomes;
+		// Attempts to auto-infer dimension from biomes if it wasn't specified
+		if (dimension == DIM_UNDEF) {
+			for (const int32_t &biome : (!biomes.empty() ? biomes : ignoredBiomes)) {
+				dimension = getDimension(biome);
+				break;
+			}
+			// Otherwise defaults to the Overworld
+			dimension = DIM_OVERWORLD;
+		}
 
+		// Initialize biome generator for version, dimension, generation mode, and worldseed
 		setupGenerator(&this->generator, version, largeBiomes);
 		applySeed(&this->generator, dimension, worldseed);
 
@@ -165,22 +196,31 @@ struct BiomeTester : public AreaCalculator::Tester<int32_t> {
 		free(this->biomeStorage);
 	}
 
-	[[nodiscard]] bool test(const int32_t &x, const int32_t &z) override {
-		if (genBiomes(&this->generator, this->biomeStorage, {1, x, z, 1, 1, this->y, 1})) return false;
-		if (this->biome == none) {
-			this->biome = this->biomeStorage[0];
-			return true;
+	[[nodiscard]] int64_t test(const int32_t &x, const int32_t &z) override {
+		// Generate biome, returning failure if unable
+		if (genBiomes(&this->generator, this->biomeStorage, {1, x, z, 1, 1, this->y, 1})) return -1;
+		int biome = this->biomeStorage[0];
+		// If no biomes were originally specified, add found biome to match list
+		if (this->biomes.empty()) {
+			this->biomes.insert(biome);
+			return 1;
 		}
-		return this->biomeStorage[0] == this->biome;
+		// If biome is contained in "biomes to search for", return success
+		if (this->biomes.find(biome) != this->biomes.end()) return 1;
+		// If biome is contained in "biomes to pass through", return pass-through
+		if (this->ignoredBiomes.find(biome) != this->ignoredBiomes.end()) return 0;
+		// Otherwise return failure
+		return -1;
 	}
 
 };
 
 int main(int argc, char **argv) {
 	// Default arguments
-	uint64_t worldseed = 0, maxIterations = UINT64_MAX;
-	int32_t version = MC_NEWEST, dimension = DIM_UNDEF, initialX = 0, y = 0, initialZ = 0, biome = none;
+	std::uint64_t worldseed = 0, maxIterations = UINT64_MAX;
+	std::int32_t version = MC_NEWEST, dimension = DIM_UNDEF, initialX = 0, y = 0, initialZ = 0;
 	bool largeBiomes = false;
+	std::unordered_set<std::int32_t> biomes, ignoredBiomes;
 
 	// Get arguments from user
 	for (int i = 1; i < argc - 1; ++i) {
@@ -193,16 +233,17 @@ int main(int argc, char **argv) {
 		else if (argument == "--y") y = std::strtol(argv[++i], NULL, 10);
 		else if (argument == "--z") initialZ = std::strtol(argv[++i], NULL, 10);
 		else if (argument == "--largebiomes") largeBiomes = StringUtilities::interpretAsBoolean(argv[++i]);
-		else if (argument == "--biome") biome = MinecraftStringUtilities::interpretAsBiome(argv[++i]);
+		else if (argument == "--biome") biomes.insert(MinecraftStringUtilities::interpretAsBiome(argv[++i]));
+		else if (argument == "--ignoredbiome") ignoredBiomes.insert(MinecraftStringUtilities::interpretAsBiome(argv[++i]));
 		else if (argument == "--maxiterations") maxIterations = std::strtoull(argv[++i], NULL, 10);
 	}
 	
 	// Run flood fill and print final area + bounding boxes
-	BiomeTester tester(version, worldseed, dimension, initialX, y, initialZ, largeBiomes, biome);
+	BiomeTester tester(version, worldseed, dimension, initialX, y, initialZ, largeBiomes, biomes, ignoredBiomes);
 	AreaCalculator::Result<int32_t> result = AreaCalculator::calculate(tester, initialX, initialZ, maxIterations);
 
 	if (!result.area) {
-		if (biome == none) {
+		if (biomes.empty()) {
 			std::printf(
 			"%sNo biome could be determined at (%" PRId32 ", %" PRId32 ") in %s on seed %" PRId64 " on version %s%s.",
 			result.haltedEarly ? "[Halted early]\n" : "",
@@ -210,9 +251,12 @@ int main(int argc, char **argv) {
 		);
 		} else {
 			std::printf(
-				"%sA %s biome does not exist at (%" PRId32 ", %" PRId32 ") in %s on seed %" PRId64 " on version %s%s.",
+				"%s%s%s biome%s do%s not exist at (%" PRId32 ", %" PRId32 ") in %s on seed %" PRId64 " on version %s%s.",
 				result.haltedEarly ? "[Halted early]\n" : "",
-				biome2str(version, biome),
+				tester.biomes.size() == 1 ? "A " : "",
+				MinecraftStringUtilities::biomesToString(biomes, version).c_str(),
+				tester.biomes.size() != 1 ? "s" : "",
+				tester.biomes.size() == 1 ? "es" : "",
 				initialX, initialZ, MinecraftStringUtilities::dimensionToString(tester.generator.dim), worldseed, mc2str(version), largeBiomes ? " under Large Biomes generation" : ""
 			);
 		}
@@ -222,9 +266,10 @@ int main(int argc, char **argv) {
 	uint64_t xRange = static_cast<int64_t>(result.maxX) - result.minX + 1;
 	uint64_t zRange = static_cast<int64_t>(result.maxZ) - result.minZ + 1;
 	std::printf(
-		"%sBiome:   %s\nArea:    %" PRIu64 " square block%s\nX-range: [%" PRId32 ", %" PRId32 "] = %" PRIu64 " block%s\nZ-range: [%" PRId32 ", %" PRId32 "] = %" PRIu64 " block%s\n",
+		"%sBiome%s  %s\nArea:    %" PRIu64 " square block%s\nX-range: [%" PRId32 ", %" PRId32 "] = %" PRIu64 " block%s\nZ-range: [%" PRId32 ", %" PRId32 "] = %" PRIu64 " block%s\n",
 		result.haltedEarly ? "[Halted early]\n" : "",
-		biome2str(tester.generator.mc, tester.biome),
+		tester.biomes.size() != 1 ? "s:" : ": ",
+		MinecraftStringUtilities::biomesToString(tester.biomes, tester.generator.mc).c_str(),
 		result.area, result.area != 1 ? "s" : "",
 		result.minX, result.maxX, xRange, xRange != 1 ? "s" : "",
 		result.minZ, result.maxZ, zRange, zRange != 1 ? "s" : ""

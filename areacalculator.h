@@ -14,8 +14,14 @@ namespace AreaCalculator {
 	// Abstract base struct for flood fill tests
 	template <typename T>
 	struct Tester {
-		[[nodiscard]] virtual bool test(const T &x, const T &z) = 0;
-		// virtual ~Tester() = 0;
+		// This method must return
+		// - a negative integer if the coordinate falls outside the shape and
+		//      should be considered as having hit a "wall",
+		// - zero if the coordinate falls outside the shape but should be
+		//      allowed to continue "passing through", or
+		// - a positive integer representing the amount of area to add to the
+		//      running total at that coordinate.
+		[[nodiscard]] virtual std::int64_t test(const T &x, const T &z) = 0;
 	};
 
 	// Result struct for the flood fill.
@@ -24,12 +30,15 @@ namespace AreaCalculator {
 		bool haltedEarly;
 		uint64_t area;
 
-		constexpr Result(const T &x, const T &z) noexcept : AreaUtilities::BoundingBox<T>(x, z), area(0) {}
-		constexpr Result(const T &minX, const T &maxX, const T &minZ, const T &maxZ) noexcept : AreaUtilities::BoundingBox<T>(minX, maxX, minZ, maxZ), area(0) {}
+		constexpr Result(const T &x, const T &z) noexcept :
+			AreaUtilities::BoundingBox<T>(x, z), area(0) {}
+		constexpr Result(const T &minX, const T &maxX, const T &minZ, const T &maxZ) noexcept :
+			AreaUtilities::BoundingBox<T>(minX, maxX, minZ, maxZ), area(0) {}
 
-		// Adds a pixel to the area + bounding box.
-		void add(const T &x, const T &z) noexcept {
-			++this->area;
+		// If amount is nonzero, adds the specified amount to the total area + bounding box.
+		void add(const T &x, const T &z, uint64_t amount = 1) noexcept {
+			if (!amount) return;
+			this->area += amount;
 			AreaUtilities::BoundingBox<T>::add(x, z);
 		}
 	};
@@ -42,7 +51,7 @@ namespace AreaCalculator {
 		Result<T> result(initialX, initialZ);
 
 		// Stop immediately if the first coordinate fails
-		if (!tester.test(initialX, initialZ)) return result;
+		if (tester.test(initialX, initialZ) < 0) return result;
 
 		// Tracks which (z-axis) spans have already been added to the tracker.
 		std::unordered_map<T, std::forward_list<AreaUtilities::Span<T>>> visitedSpans;
@@ -57,8 +66,9 @@ namespace AreaCalculator {
 			T x = currentBox.minX;
 
 			// If the current pixel is valid, add all valid pixels immediately to its left
-			if (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, x, z) && tester.test(x, z)) {
-				while (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, x - 1, z) && tester.test(x - 1, z)) result.add(--x, z);
+			if (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, x, z) && tester.test(x, z) >= 0) {
+				std::int64_t amount;
+				while (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, x - 1, z) && (amount = tester.test(x - 1, z)) >= 0) result.add(--x, z, amount);
 				/* Then mark that span on the row that was just left, in case it had been blocked by a pixel on the left.
 				We don't need to add a span to the unordered map because the loop below always runs at least once.*/
 				if (x < currentBox.minX) queue.push({x, currentBox.minX - 1, z - dz, -dz});
@@ -66,7 +76,8 @@ namespace AreaCalculator {
 			// Then, iterating to the right:
 			do {
 				// Add all pixels until a wall is reached
-				while (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, currentBox.minX, z) && tester.test(currentBox.minX, z)) result.add(currentBox.minX++, z);
+				std::int64_t amount;
+				while (!AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, currentBox.minX, z) && (amount = tester.test(currentBox.minX, z)) >= 0) result.add(currentBox.minX++, z, amount);
 				// If any pixels had been added this round at all (either to the left or the right), mark the full span checked for the next row
 				if (x < currentBox.minX) {
 					AreaUtilities::Span<T>::addSpanTo(visitedSpans[z], {x, currentBox.minX - 1});
@@ -76,11 +87,12 @@ namespace AreaCalculator {
 				We don't need to add another span because x is guaranteed to be <= currentBox.maxX + 1.*/
 				if (currentBox.minX - 1 > currentBox.maxX) queue.push({currentBox.maxX + 1, currentBox.minX - 1, z - dz, -dz});
 				// Continue iterating rightwards until the wall is passed (if it was previously hit above) or the old right border is reached
-				do {++currentBox.minX;} while (currentBox.minX < currentBox.maxX && (AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, currentBox.minX, z) || !tester.test(currentBox.minX, z)));
+				do {++currentBox.minX;} while (currentBox.minX < currentBox.maxX && (AreaUtilities::Span<T>::visitedSpansContains(visitedSpans, currentBox.minX, z) || tester.test(currentBox.minX, z) < 0));
 				x = currentBox.minX;
 			} while (currentBox.minX <= currentBox.maxX);
 			queue.pop();
 		}
+		// An early halt occurred if the queue hadn't been emptied yet
 		result.haltedEarly = !queue.empty();
 		return result;
 	}
